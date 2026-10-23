@@ -3,50 +3,485 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, shrink-to-fit=no">
-    
-    <!-- Full Screen Settings -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Retro Bowl">
-    <link rel="apple-touch-icon" href="https://poki.com">
-    
+    <meta name="apple-mobile-web-app-title" content="Retro Bowl Offline">
     <title>Retro Bowl Offline</title>
     <style>
+        :root {
+            --bg: #051b12;
+            --field: #0d5f3f;
+            --goal: #0b3f2c;
+            --line: rgba(255,255,255,0.8);
+            --player: #f7f7f7;
+            --opp: #ff4d4d;
+            --ball: #ffd166;
+            --text: #edfff5;
+            --shadow: rgba(0,0,0,0.35);
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { width: 100%; height: 100%; background-color: #000000; overflow: hidden; position: fixed; }
-        #canvas { width: 100vw; height: 100vh; display: block; }
+        html, body {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            background: var(--bg);
+            overflow: hidden;
+            font-family: Arial, Helvetica, sans-serif;
+        }
+
+        body {
+            display: grid;
+            place-items: center;
+        }
+
+        #canvas {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+            background: var(--field);
+            touch-action: none;
+            image-rendering: auto;
+        }
     </style>
 </head>
 <body>
+    <canvas id="canvas" width="960" height="540" aria-label="Retro Bowl game canvas"></canvas>
 
-    <!-- Native Local Canvas Container -->
-    <canvas id="canvas" oncontextmenu="event.preventDefault();"></canvas>
-
-    <!-- Self-Contained Offline Retro Bowl Engine Core -->
     <script>
-        window.addEventListener("load", function () {
-            const canvas = document.getElementById("canvas");
-            const ctx = canvas.getContext("2d");
-            
-            // Set internal resolution
-            canvas.width = 960;
-            canvas.height = 540;
+        (() => {
+            const canvas = document.getElementById('canvas');
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                document.body.innerHTML = '<div style="display:grid;place-items:center;width:100vw;height:100vh;background:#000;color:#fff;font-family:sans-serif;">Canvas is not supported in this browser.</div>';
+                return;
+            }
 
-            // Draw a fallback retro boot image directly via code if game script fails
-            ctx.fillStyle = "#000000";
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = "#00ffff";
-            ctx.font = "30px monospace";
-            ctx.textAlign = "center";
-            ctx.fillText("TITAN ENGINE v1.0", canvas.width / 2, canvas.height / 2 - 20);
-            ctx.fillStyle = "#ffffff";
-            ctx.font = "20px monospace";
-            ctx.fillText("LOADING RETRO BOWL LOCAL BUILD...", canvas.width / 2, canvas.height / 2 + 30);
-        });
+            const W = canvas.width;
+            const H = canvas.height;
+
+            const keys = {};
+            const pointer = { x: 0, y: 0, down: false };
+
+            const game = {
+                score: 0,
+                oppScore: 0,
+                timer: 60,
+                message: 'Drive the ball to the end zone!',
+                started: false,
+                over: false,
+                ended: false,
+                ballOwner: 'player',
+                playClock: 0,
+                lastTs: 0,
+                field: {
+                    left: 50,
+                    right: W - 50,
+                    top: 30,
+                    bottom: H - 30,
+                    goalTop: 180,
+                    goalBottom: 360
+                }
+            };
+
+            const player = {
+                x: 150,
+                y: H / 2,
+                r: 18,
+                speed: 220,
+                color: '#f3f6ff',
+                vx: 0,
+                vy: 0,
+                facing: 1,
+                hasBall: true
+            };
+
+            const opp = {
+                x: W - 180,
+                y: H / 2,
+                r: 18,
+                speed: 200,
+                color: '#ff5d5d',
+                vx: 0,
+                vy: 0,
+                facing: -1,
+                hasBall: false
+            };
+
+            const ball = {
+                x: player.x + 26,
+                y: player.y,
+                r: 8,
+                vx: 0,
+                vy: 0,
+                airborne: false,
+                owner: 'player',
+                trail: []
+            };
+
+            function resetDown() {
+                player.x = 150;
+                player.y = H / 2;
+                opp.x = W - 180;
+                opp.y = H / 2;
+                player.hasBall = true;
+                opp.hasBall = false;
+                ball.owner = 'player';
+                ball.airborne = false;
+                ball.x = player.x + 26;
+                ball.y = player.y;
+                ball.vx = 0;
+                ball.vy = 0;
+                ball.trail = [];
+                game.message = 'Drive the ball to the end zone!';
+                game.playClock = 0;
+            }
+
+            function resetGame() {
+                game.score = 0;
+                game.oppScore = 0;
+                game.timer = 60;
+                game.over = false;
+                game.started = true;
+                game.ended = false;
+                resetDown();
+            }
+
+            function clamp(value, min, max) {
+                return Math.min(Math.max(value, min), max);
+            }
+
+            function handleKeyboard() {
+                const dx = (keys['ArrowRight'] || keys['d'] ? 1 : 0) - (keys['ArrowLeft'] || keys['a'] ? 1 : 0);
+                const dy = (keys['ArrowDown'] || keys['s'] ? 1 : 0) - (keys['ArrowUp'] || keys['w'] ? 1 : 0);
+
+                player.vx = dx * player.speed;
+                player.vy = dy * player.speed;
+
+                if (dx !== 0) player.facing = dx > 0 ? 1 : -1;
+            }
+
+            function handlePointerMove(evt) {
+                const rect = canvas.getBoundingClientRect();
+                pointer.x = ((evt.clientX - rect.left) / rect.width) * canvas.width;
+                pointer.y = ((evt.clientY - rect.top) / rect.height) * canvas.height;
+            }
+
+            function handlePointerDown(evt) {
+                handlePointerMove(evt);
+                pointer.down = true;
+                if (game.over || !game.started) {
+                    resetGame();
+                    return;
+                }
+
+                if (ball.owner === 'player') {
+                    const dx = pointer.x - player.x;
+                    const dy = pointer.y - player.y;
+                    const power = 520;
+                    const aimX = dx === 0 ? 1 : dx;
+                    const aimY = dy === 0 ? 0 : dy;
+
+                    const magnitude = Math.hypot(aimX, aimY) || 1;
+                    ball.owner = 'thrown';
+                    ball.airborne = true;
+                    ball.vx = (aimX / magnitude) * power;
+                    ball.vy = (aimY / magnitude) * power * 0.4;
+                    ball.x = player.x;
+                    ball.y = player.y;
+                    player.hasBall = false;
+                    game.message = 'Pass!';
+                }
+            }
+
+            function handlePointerUp() {
+                pointer.down = false;
+            }
+
+            function moveEntity(entity, dt) {
+                entity.x += entity.vx * dt;
+                entity.y += entity.vy * dt;
+                entity.x = clamp(entity.x, 50, W - 50);
+                entity.y = clamp(entity.y, 60, H - 60);
+            }
+
+            function updateOpponent(dt) {
+                const targetY = clamp(ball.y, 90, H - 90);
+                const direction = player.x < W / 2 ? 1 : -1;
+
+                opp.vx = direction * opp.speed * 0.75;
+                opp.vy = (targetY - opp.y) * 0.75;
+
+                const targetX = ball.airborne ? ball.x : W - 180;
+                if (ball.owner === 'player' || ball.owner === 'thrown') {
+                    opp.vx = (targetX - opp.x) * 0.8;
+                }
+
+                opp.vx = clamp(opp.vx, -opp.speed, opp.speed);
+                opp.vy = clamp(opp.vy, -opp.speed, opp.speed);
+
+                opp.x += opp.vx * dt;
+                opp.y += opp.vy * dt;
+                opp.x = clamp(opp.x, 80, W - 80);
+                opp.y = clamp(opp.y, 80, H - 80);
+            }
+
+            function updateBall(dt) {
+                if (ball.owner === 'player') {
+                    ball.x = player.x + 26 * player.facing;
+                    ball.y = player.y + 6;
+                    return;
+                }
+
+                if (ball.owner === 'thrown') {
+                    ball.x += ball.vx * dt;
+                    ball.y += ball.vy * dt;
+                    ball.vy += 260 * dt;
+
+                    ball.trail.push({ x: ball.x, y: ball.y });
+                    if (ball.trail.length > 12) ball.trail.shift();
+
+                    if (ball.x < 0 || ball.x > W || ball.y > H + 40 || ball.y < -40) {
+                        ball.owner = 'player';
+                        ball.airborne = false;
+                        ball.vx = 0;
+                        ball.vy = 0;
+                        game.message = 'Incomplete pass!';
+                        resetDown();
+                        return;
+                    }
+
+                    const catchDistance = Math.hypot(ball.x - opp.x, ball.y - opp.y);
+                    if (catchDistance < 24) {
+                        ball.owner = 'opp';
+                        ball.airborne = false;
+                        ball.vx = 0;
+                        ball.vy = 0;
+                        game.message = 'Defense intercepted!';
+                        opp.hasBall = true;
+                        return;
+                    }
+
+                    const passedEndZone = ball.x > W - 80;
+                    if (passedEndZone) {
+                        game.score += 7;
+                        game.message = 'Touchdown!';
+                        ball.airborne = false;
+                        ball.owner = 'player';
+                        resetDown();
+                        return;
+                    }
+                }
+
+                if (ball.owner === 'opp') {
+                    ball.x = opp.x - 18;
+                    ball.y = opp.y;
+                    if (Math.hypot(opp.x - player.x, opp.y - player.y) < 26) {
+                        ball.owner = 'player';
+                        player.hasBall = true;
+                        game.message = 'You tackled the defender!';
+                    }
+                }
+            }
+
+            function update(dt) {
+                if (!game.started) return;
+
+                game.timer -= dt;
+                if (game.timer <= 0) {
+                    game.timer = 0;
+                    game.over = true;
+                    game.ended = true;
+                    game.message = 'Clock expired - game over.';
+                    return;
+                }
+
+                handleKeyboard();
+                moveEntity(player, dt);
+                updateOpponent(dt);
+                updateBall(dt);
+
+                const goalLine = W - 90;
+                if (player.x >= goalLine && ball.owner === 'player') {
+                    game.score += 7;
+                    game.message = 'Touchdown!';
+                    resetDown();
+                }
+
+                if (Math.abs(player.x - opp.x) < 24 && Math.abs(player.y - opp.y) < 24) {
+                    if (ball.owner === 'player') {
+                        ball.owner = 'opp';
+                        opp.hasBall = true;
+                        game.message = 'Tackle! Defense takes over.';
+                    }
+                }
+
+                if (game.score >= 21 || game.oppScore >= 21) {
+                    game.over = true;
+                    game.ended = true;
+                    game.message = 'Game complete! Press or tap to restart.';
+                }
+            }
+
+            function drawField() {
+                ctx.clearRect(0, 0, W, H);
+                ctx.fillStyle = '#0d5f3f';
+                ctx.fillRect(0, 0, W, H);
+
+                ctx.fillStyle = '#0a442f';
+                ctx.fillRect(40, 30, W - 80, H - 60);
+
+                ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(40, 30, W - 80, H - 60);
+
+                for (let i = 0; i < 10; i++) {
+                    const x = 90 + i * 78;
+                    ctx.beginPath();
+                    ctx.moveTo(x, 30);
+                    ctx.lineTo(x, H - 30);
+                    ctx.stroke();
+                }
+
+                ctx.beginPath();
+                ctx.moveTo(W / 2, 30);
+                ctx.lineTo(W / 2, H - 30);
+                ctx.stroke();
+
+                ctx.fillStyle = '#d8f7e4';
+                ctx.fillRect(40, 180, 35, 180);
+                ctx.fillRect(W - 75, 180, 35, 180);
+
+                ctx.fillStyle = 'rgba(255,255,255,0.12)';
+                ctx.fillRect(0, 0, W, 30);
+                ctx.fillRect(0, H - 30, W, 30);
+            }
+
+            function drawScoreboard() {
+                ctx.fillStyle = 'rgba(0,0,0,0.28)';
+                ctx.fillRect(350, 8, 260, 46);
+                ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+                ctx.strokeRect(350, 8, 260, 46);
+
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 24px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('RETRO BOWL', W / 2, 39);
+
+                ctx.font = 'bold 20px Arial';
+                ctx.fillText(`${game.score}   :   ${game.oppScore}`, W / 2, 47);
+
+                ctx.fillStyle = '#e8ffef';
+                ctx.font = '16px Arial';
+                ctx.fillText(`TIME ${Math.ceil(game.timer)}`, W - 110, 40);
+            }
+
+            function drawPlayer(p, isPlayer) {
+                ctx.fillStyle = isPlayer ? p.color : '#ff5d5d';
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.fillStyle = 'rgba(0,0,0,0.18)';
+                ctx.beginPath();
+                ctx.ellipse(p.x, p.y + p.r + 8, p.r * 0.9, p.r * 0.5, 0, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            function drawBall() {
+                if (ball.trail.length) {
+                    ctx.strokeStyle = 'rgba(255,209,102,0.6)';
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(ball.trail[0].x, ball.trail[0].y);
+                    for (let i = 1; i < ball.trail.length; i++) {
+                        ctx.lineTo(ball.trail[i].x, ball.trail[i].y);
+                    }
+                    ctx.stroke();
+                }
+
+                ctx.fillStyle = '#ffd166';
+                ctx.beginPath();
+                ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            function drawMessage() {
+                ctx.fillStyle = 'rgba(0,0,0,0.38)';
+                ctx.fillRect(170, 70, W - 340, 34);
+                ctx.fillStyle = '#ffffff';
+                ctx.textAlign = 'center';
+                ctx.font = 'bold 18px Arial';
+                ctx.fillText(game.message, W / 2, 92);
+            }
+
+            function drawStartOverlay() {
+                if (!game.started) {
+                    ctx.fillStyle = 'rgba(0,0,0,0.56)';
+                    ctx.fillRect(0, 0, W, H);
+                    ctx.fillStyle = '#ffffff';
+                    ctx.textAlign = 'center';
+                    ctx.font = 'bold 42px Arial';
+                    ctx.fillText('RETRO BOWL OFFLINE', W / 2, H / 2 - 30);
+                    ctx.font = '22px Arial';
+                    ctx.fillText('Tap or click to start a drive', W / 2, H / 2 + 20);
+                    ctx.fillText('Move with WASD or arrow keys, throw with click / tap', W / 2, H / 2 + 60);
+                }
+            }
+
+            function draw() {
+                drawField();
+                drawScoreboard();
+                drawMessage();
+                drawPlayer(player, true);
+                drawPlayer(opp, false);
+                drawBall();
+                drawStartOverlay();
+            }
+
+            let lastTime = 0;
+            function tick(ts) {
+                const dt = (ts - lastTime) / 1000 || 0.016;
+                lastTime = ts;
+                update(dt);
+                draw();
+                requestAnimationFrame(tick);
+            }
+
+            window.addEventListener('keydown', (e) => {
+                keys[e.key] = true;
+                keys[e.key.toLowerCase()] = true;
+                if (e.code === 'Space') {
+                    if (!game.started) {
+                        resetGame();
+                    } else if (ball.owner === 'player') {
+                        const throwX = player.facing > 0 ? 1 : -1;
+                        const throwY = 0;
+                        ball.owner = 'thrown';
+                        ball.airborne = true;
+                        ball.vx = throwX * 520;
+                        ball.vy = throwY * 220;
+                        ball.x = player.x;
+                        ball.y = player.y;
+                        player.hasBall = false;
+                        game.message = 'Pass!';
+                    }
+                }
+            });
+
+            window.addEventListener('keyup', (e) => {
+                keys[e.key] = false;
+                keys[e.key.toLowerCase()] = false;
+            });
+
+            canvas.addEventListener('pointerdown', handlePointerDown);
+            canvas.addEventListener('pointermove', handlePointerMove);
+            canvas.addEventListener('pointerup', handlePointerUp);
+            canvas.addEventListener('pointerleave', handlePointerUp);
+
+            resetGame();
+            requestAnimationFrame(tick);
+        })();
     </script>
-    
-    <!-- Safe JavaScript Injection Stream -->
-    <script src="https://jsdelivr.net" onerror="console.log('Using local cached array buffer')"></script>
-
 </body>
 </html>
